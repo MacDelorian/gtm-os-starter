@@ -9,7 +9,7 @@ job boards miss. This skill reads those pages.
 
 It is one piece of **GTM OS**, the Claude Code setup I run my go-to-market agency
 [Vurell](https://vurell.com) on. The full template and a 4-week course on making it yours are
-coming: **[join the waitlist](https://vurell.com/gtm-os)**.
+coming: **[join the waitlist](https://vurell.com/gtm-os)**. I post what I build, with the numbers, on X: [@msabelnykov](https://x.com/msabelnykov).
 
 ## Try it in a minute (offline, fictional data)
 
