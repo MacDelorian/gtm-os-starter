@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import csv
 import html
+import json
 import ipaddress
 import json
 import re
@@ -66,7 +67,8 @@ COPY = re.compile(r"[.!?]\s|[.!?]$|\b(we|we're|our|us|you|your|you're)\b", re.I)
 
 
 def looks_like_title(line: str) -> bool:
-    return len(line.split()) <= 8 and not COPY.search(line)
+    # a title starts with a capital: "the GTM brain used in every sales call" (ramp.com, 10-21) is copy
+    return len(line.split()) <= 8 and not COPY.search(line) and line[:1].isupper()
 
 
 # ---------------------------------------------------------------- fetching
@@ -143,6 +145,40 @@ def robots_disallows(robots: str, path: str) -> bool:
     return bool(best and best[0] == "disallow")
 
 
+# ---------------------------------------------------------------- applicant-tracking feeds
+# Greenhouse, Lever and Ashby publish every open role as public JSON. When a careers link or an embed points
+# at one of them, the titles come from the feed: exact, and it works where the page is drawn by JavaScript.
+# (Suggested in a reply on X, 2026-10-21.)
+FEEDS = [
+    (re.compile(r"https?://(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io/(?:embed/job_board(?:/js)?\?for=)?([A-Za-z0-9_-]+)", re.I),
+     lambda m: f"https://boards-api.greenhouse.io/v1/boards/{m.group(1)}/jobs", "jobs", "title"),
+    (re.compile(r"https?://jobs\.(eu\.)?lever\.co/([A-Za-z0-9_-]+)", re.I),
+     lambda m: f"https://api.{'eu.' if m.group(1) else ''}lever.co/v0/postings/{m.group(2)}?mode=json&limit=100", None, "text"),
+    (re.compile(r"https?://jobs\.ashbyhq\.com/([A-Za-z0-9_.%-]+)", re.I),
+     lambda m: f"https://api.ashbyhq.com/posting-api/job-board/{m.group(1)}", "jobs", "title"),
+]
+
+
+def ats_feed(page_or_url: str):
+    """The first Greenhouse/Lever/Ashby board named in a URL or a page, as (feed url, list key, title field)."""
+    for rx, make, key, field in FEEDS:
+        m = rx.search(page_or_url or "")
+        if m and m.group(m.lastindex).lower() not in ("embed", "jobs", "api"):
+            return make(m), key, field
+    return None
+
+
+def feed_roles(raw: str, key, field) -> list[str]:
+    data = json.loads(raw)
+    items = data.get(key, []) if key else data
+    out: list[str] = []
+    for it in items if isinstance(items, list) else []:
+        title = re.sub(r"\s+", " ", str((it or {}).get(field) or "")).strip()
+        if title and SALES_TITLE.search(title) and not NOT_A_ROLE.search(title) and title not in out:
+            out.append(title)
+    return out[:5]
+
+
 # ---------------------------------------------------------------- reading
 
 def careers_url(site: str, home: str) -> str:
@@ -188,6 +224,13 @@ def check(row: dict, get=http_get, respect_robots: bool = True) -> dict | None:
     except Exception:
         return None
     url = careers_url(site, home)
+    feed = ats_feed(url)
+    if feed:
+        try:
+            roles = feed_roles(get(feed[0]), feed[1], feed[2])
+            return {**row, "careers_url": url, "roles": roles, "via": "ats feed"} if roles else None
+        except Exception:
+            pass  # the feed failed; read the page instead
     tries = [url] if url else [site + "/careers", site + "/jobs"]
     for u in tries:
         same_site = urllib.parse.urlsplit(u).hostname == urllib.parse.urlsplit(site).hostname
@@ -197,6 +240,13 @@ def check(row: dict, get=http_get, respect_robots: bool = True) -> dict | None:
             page = get(u)
         except Exception:
             continue
+        feed = ats_feed(page)  # an own careers page that embeds or links its ATS board: the feed is exact
+        if feed:
+            try:
+                roles = feed_roles(get(feed[0]), feed[1], feed[2])
+                return {**row, "careers_url": u, "roles": roles, "via": "ats feed"} if roles else None
+            except Exception:
+                pass
         roles = roles_in(page)
         if roles:
             return {**row, "careers_url": u, "roles": roles}
@@ -278,6 +328,17 @@ def selftest() -> int:
     t("marketing copy is not a role", roles_in("<h2>Sales is harder than ever. We're here to help.</h2><p>Today, 40,000+ sales teams use it.</p>") == [])
     t("a 'hiring signals' feature link is not a careers page", careers_url("https://x.example", '<a href="/signals">Hiring signals</a>') == "")
     t("a 'we're hiring' link is", careers_url("https://x.example", "<a href=\"/team\">We're hiring</a>") == "https://x.example/team")
+    t("a Greenhouse board maps to its feed", ats_feed("https://job-boards.greenhouse.io/acme")[0] == "https://boards-api.greenhouse.io/v1/boards/acme/jobs")
+    t("a Greenhouse embed maps to its feed", ats_feed('<script src="https://boards.greenhouse.io/embed/job_board/js?for=acme">')[0].endswith("/boards/acme/jobs"))
+    t("a Lever EU board maps to the EU feed", ats_feed("https://jobs.eu.lever.co/acme/")[0].startswith("https://api.eu.lever.co/v0/postings/acme"))
+    t("an Ashby board maps to its feed", ats_feed("https://jobs.ashbyhq.com/acme")[0] == "https://api.ashbyhq.com/posting-api/job-board/acme")
+    t("feed titles keep only selling roles", feed_roles('{"jobs":[{"title":"Account Executive"},{"title":"Backend Engineer"},{"title":"Salesforce Developer"}]}', "jobs", "title") == ["Account Executive"])
+    t("a Lever list feed is read", feed_roles('[{"text":"SDR, DACH"},{"text":"Designer"}]', None, "text") == ["SDR, DACH"])
+    fake = {"https://x.example/robots.txt": "", "https://x.example/": '<a href="https://jobs.ashbyhq.com/x">Careers</a>',
+            "https://api.ashbyhq.com/posting-api/job-board/x": '{"jobs":[{"title":"Founding Account Executive"}]}'}
+    hit = check({"company": "X", "site": "x.example"}, get=lambda u: fake[u])
+    t("check() reads the ATS feed", bool(hit) and hit["roles"] == ["Founding Account Executive"] and hit["via"] == "ats feed")
+    t("a lowercase line is copy, not a title", roles_in("<p>the GTM brain used in every sales call</p>") == [])
     t("a German selling title", bool(SALES_TITLE.search("Mitarbeiter Vertrieb (m/w/d)")))
     t("Salesforce developer is not a selling role", not SALES_TITLE.search("Salesforce Developer"))
     t("robots: disallow all", robots_disallows("User-agent: *\nDisallow: /", "/careers"))

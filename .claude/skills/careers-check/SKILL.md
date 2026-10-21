@@ -36,7 +36,8 @@ no logins, no LinkedIn, no personal data.
 
 ## Limits to tell the user
 
-- Careers pages rendered only by JavaScript come back empty. A company the script misses is not proof
+- Greenhouse, Lever and Ashby boards are read from their public JSON feeds (rows marked `"via": "ats feed"`).
+  Other careers pages rendered only by JavaScript come back empty. A company the script misses is not proof
   that it is not hiring; check a few big names by hand.
 - Titles are matched in English, German, Czech, Polish, Lithuanian and Ukrainian. Other languages need a
   line added to `SALES_TITLE`.

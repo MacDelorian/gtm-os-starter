@@ -58,7 +58,10 @@ it over 2,668 startup sites from accelerator lists, it returned 125 hits. After 
 - At most 4 requests per company, robots.txt honoured, an identifying user agent.
 - Every URL is checked before it is fetched: http(s) to a public address only, re-checked on each
   redirect. A link on someone else's page cannot reach your machine or your network.
-- Careers pages rendered only by JavaScript come back empty. Missing a company is not proof it isn't hiring.
+- When a careers page links or embeds Greenhouse, Lever or Ashby, the roles come from that board's public
+  JSON feed: exact titles, and it works where the page itself is drawn by JavaScript.
+- Other careers pages rendered only by JavaScript still come back empty. Missing a company is not proof it
+  isn't hiring.
 - It finds the signal. It never contacts anyone.
 
 ## Requirements
